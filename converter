@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""
+JSON to CSV Converter
+Supports flat JSON objects, arrays of objects, and nested JSON (with flattening).
+Usage:
+    python json_to_csv.py input.json output.csv
+    python json_to_csv.py input.json output.csv --flatten
+    python json_to_csv.py input.json output.csv --delimiter ";"
+"""
+
+import json
+import csv
+import argparse
+import sys
+from pathlib import Path
+
+
+def flatten_dict(d: dict, parent_key: str = "", sep: str = ".") -> dict:
+    """Recursively flatten a nested dictionary."""
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        elif isinstance(v, list):
+            # Convert lists to a semicolon-separated string
+            items[new_key] = "; ".join(str(i) for i in v)
+        else:
+            items[new_key] = v
+    return items
+
+
+def load_json(filepath: str) -> any:
+    """Load and parse a JSON file."""
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {filepath}")
+    if path.suffix.lower() not in (".json", ".jsonl"):
+        print(f"Warning: File '{filepath}' does not have a .json extension.")
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        # Try JSONL (one JSON object per line)
+        content = f.read().strip()
+        lines = content.splitlines()
+        if len(lines) > 1:
+            try:
+                data = [json.loads(line) for line in lines if line.strip()]
+                print(f"Detected JSONL format: {len(data)} records.")
+                return data
+            except json.JSONDecodeError:
+                pass  # Not JSONL — fall through to standard JSON
+        return json.loads(content)
+
+
+def normalize_to_list(data: any) -> list[dict]:
+    """Ensure data is a list of dicts, regardless of input shape."""
+    if isinstance(data, list):
+        if not data:
+            raise ValueError("JSON array is empty.")
+        if not all(isinstance(item, dict) for item in data):
+            raise ValueError("All items in the JSON array must be objects (dicts).")
+        return data
+    elif isinstance(data, dict):
+        # Single object → wrap in list
+        return [data]
+    else:
+        raise ValueError(
+            f"Unsupported JSON root type: {type(data).__name__}. "
+            "Expected an object or an array of objects."
+        )
+
+
+def convert(
+    input_path: str,
+    output_path: str,
+    flatten: bool = False,
+    delimiter: str = ",",
+) -> int:
+    """
+    Convert a JSON file to CSV.
+
+    Returns:
+        Number of rows written.
+    """
+    print(f"Loading JSON from: {input_path}")
+    raw = load_json(input_path)
+
+    records = normalize_to_list(raw)
+
+    if flatten:
+        print("Flattening nested structures...")
+        records = [flatten_dict(r) for r in records]
+
+    # Collect all unique keys in order (preserving first-seen order)
+    fieldnames = list(dict.fromkeys(k for record in records for k in record))
+
+    print(f"Writing {len(records)} rows with {len(fieldnames)} columns to: {output_path}")
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=fieldnames,
+            delimiter=delimiter,
+            extrasaction="ignore",       # silently skip unknown fields
+            restval="",                  # fill missing fields with empty string
+        )
+        writer.writeheader()
+        writer.writerows(records)
+
+    return len(records)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Convert a JSON file to CSV.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("input", help="Path to the input JSON or JSONL file.")
+    parser.add_argument("output", help="Path for the output CSV file.")
+    parser.add_argument(
+        "--flatten",
+        action="store_true",
+        help="Flatten nested JSON objects using dot notation (e.g. address.city).",
+    )
+    parser.add_argument(
+        "--delimiter",
+        default=",",
+        metavar="CHAR",
+        help="CSV field delimiter (default: comma). Use ';' for European locales.",
+    )
+    args = parser.parse_args()
+
+    try:
+        rows = convert(
+            input_path=args.input,
+            output_path=args.output,
+            flatten=args.flatten,
+            delimiter=args.delimiter,
+        )
+        print(f"Done! {rows} row(s) written to '{args.output}'.")
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
