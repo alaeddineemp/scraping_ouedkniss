@@ -183,7 +183,14 @@ def fetch_page(page: int, session: requests.Session) -> dict:
         print(f"  ✗ HTTP {response.status_code}: {response.text[:400]}")
         response.raise_for_status()
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        print(f"  ✗ Non-JSON response (HTTP {response.status_code}). "
+              f"Content-Type: {response.headers.get('content-type')}")
+        print(f"  Body preview: {response.text[:1000]!r}")
+        raise
+
     if "errors" in data:
         print(f"  ✗ GraphQL errors: {data['errors']}")
         raise ValueError(f"GraphQL error on page {page}")
