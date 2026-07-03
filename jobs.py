@@ -16,9 +16,10 @@ import requests
 from pathlib import Path
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-MAX_PAGES   = None         # None = scrape ALL pages (~605 pages, ~29,000 jobs)
-OUTPUT_FILE = "jobs.json"  # Change to "jobs.csv" for Excel
-DELAY_SEC   = 1.0          # Polite delay between pages
+MAX_PAGES = 10           # None = scrape ALL pages (~605 pages, ~29,000 jobs)
+JSON_FILE = "jobs.json"  # Raw scrape output
+CSV_FILE  = "jobs.csv"   # Auto-generated from JSON_FILE after scraping
+DELAY_SEC = 1.0          # Polite delay between pages
 # ──────────────────────────────────────────────────────────────────────────────
 
 GRAPHQL_URL = "https://api.ouedkniss.com/graphql"
@@ -299,15 +300,37 @@ def save_json(jobs: list[dict], filename: str):
     print(f"\n✅ Saved {len(jobs)} jobs → {filename}")
 
 
-def save_csv(jobs: list[dict], filename: str):
+def flatten_dict(d: dict, parent_key: str = "", sep: str = ".") -> dict:
+    """Recursively flatten a nested dictionary; lists become '; '-joined strings."""
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        elif isinstance(v, list):
+            items[new_key] = "; ".join(str(i) for i in v)
+        else:
+            items[new_key] = v
+    return items
+
+
+def json_to_csv(json_filename: str, csv_filename: str):
+    """Load a JSON array of job objects and convert it to CSV, flattening as needed."""
+    jobs = json.loads(Path(json_filename).read_text(encoding="utf-8"))
     if not jobs:
-        print("No jobs to save.")
+        print("No jobs to convert.")
         return
-    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=jobs[0].keys())
+
+    rows = [flatten_dict(job) for job in jobs]
+
+    # Union of all keys, in first-seen order, so no row is missing a column.
+    fieldnames = list(dict.fromkeys(key for row in rows for key in row))
+
+    with open(csv_filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(jobs)
-    print(f"\n✅ Saved {len(jobs)} jobs → {filename}")
+        writer.writerows(rows)
+    print(f"✅ Converted {len(rows)} jobs → {csv_filename}")
 
 
 def main():
@@ -353,10 +376,8 @@ def main():
 
     print(f"\n📦 Total jobs collected: {len(all_jobs)}")
 
-    if OUTPUT_FILE.endswith(".csv"):
-        save_csv(all_jobs, OUTPUT_FILE)
-    else:
-        save_json(all_jobs, OUTPUT_FILE)
+    save_json(all_jobs, JSON_FILE)
+    json_to_csv(JSON_FILE, CSV_FILE)
 
 
 if __name__ == "__main__":

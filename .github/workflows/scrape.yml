@@ -1,0 +1,38 @@
+name: Scrape Ouedkniss Jobs
+
+on:
+  schedule:
+    # 1st of every month at 06:17 UTC
+    - cron: "17 6 1 * *"
+  workflow_dispatch: {}
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run scraper
+        run: python jobs.py
+
+      - name: Email CSV
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Ouedkniss Scraper
+          to: alaeddine.benharira@emploitic.com
+          subject: "Ouedkniss Jobs — ${{ github.run_id }}"
+          body: "Automated monthly scrape attached (jobs.csv)."
+          attachments: jobs.csv

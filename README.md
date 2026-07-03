@@ -25,3 +25,14 @@ python converter jobs.json jobs.csv --flatten
 ## Note
 
 `jobs.json` / `jobs.csv` (scraped output) are gitignored and not tracked in this repo.
+
+## Automation (GitHub Actions)
+
+`.github/workflows/scrape.yml` runs the scraper on the 1st of every month (and on-demand via the Actions tab → "Scrape Ouedkniss Jobs" → Run workflow), then emails the resulting `jobs.csv`.
+
+Requires two repository secrets (Settings → Secrets and variables → Actions):
+
+- `MAIL_USERNAME` — the sending Gmail address
+- `MAIL_PASSWORD` — a Gmail [App Password](https://myaccount.google.com/apppasswords) (requires 2FA enabled on the account; a normal password will not work)
+
+`MAX_PAGES` in `jobs.py` is currently set to `10` for faster runs; set it to `None` for a full scrape.
