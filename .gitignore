@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 jobs.json
 jobs.csv
+email_config.json
+email_config.json.save
+*.save
+run.log
+streamlit.log
+.streamlit/secrets.toml

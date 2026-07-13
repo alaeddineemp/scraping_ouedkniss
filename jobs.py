@@ -12,14 +12,18 @@ import json
 import csv
 import time
 import uuid
+import smtplib
 import requests
+from datetime import date
+from email.message import EmailMessage
 from pathlib import Path
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-MAX_PAGES = 10           # None = scrape ALL pages (~605 pages, ~29,000 jobs)
-JSON_FILE = "jobs.json"  # Raw scrape output
-CSV_FILE  = "jobs.csv"   # Auto-generated from JSON_FILE after scraping
-DELAY_SEC = 1.0          # Polite delay between pages
+MAX_PAGES   = 10                 # None = scrape ALL pages (~605 pages, ~29,000 jobs)
+JSON_FILE   = "jobs.json"        # Raw scrape output
+CSV_FILE    = "jobs.csv"         # Auto-generated from JSON_FILE after scraping
+DELAY_SEC   = 1.0                # Polite delay between pages
+EMAIL_CONFIG_FILE = Path(__file__).parent / "email_config.json"
 # ──────────────────────────────────────────────────────────────────────────────
 
 GRAPHQL_URL = "https://api.ouedkniss.com/graphql"
@@ -59,7 +63,7 @@ CATEGORY_MAP = {
 }
 
 QUERY = """
-query SearchQuery($q: String, $filter: SearchFilterInput, $mediaSize: MediaSize = MEDIUM) {
+query SearchQuery($q: String, $filter: SearchFilterInput) {
   search(q: $q, filter: $filter) {
     announcements {
       data {
@@ -68,49 +72,18 @@ query SearchQuery($q: String, $filter: SearchFilterInput, $mediaSize: MediaSize 
         slug
         createdAt: refreshedAt
         isFromStore
-        isCommentEnabled
-        hasDelivery
-        deliveryType
-        paymentMethod
         likeCount
-        description
         status
         cities {
-          id
           name
-          slug
           region {
-            id
             name
-            slug
           }
         }
         store {
           id
           name
-          slug
-          imageUrl
-          isOfficial
-          isVerified
         }
-        user {
-          id
-        }
-        defaultMedia(size: $mediaSize) {
-          mediaUrl
-          mimeType
-        }
-        medias(size: SMALL) {
-          mediaUrl
-          mimeType
-        }
-        price
-        pricePreview
-        priceUnit
-        oldPrice
-        oldPricePreview
-        priceType
-        exchangeType
         category {
           id
           slug
@@ -154,7 +127,6 @@ def fetch_page(page: int, session: requests.Session) -> dict:
         "operationName": "SearchQuery",
         "query": QUERY,
         "variables": {
-            "mediaSize": "MEDIUM",
             "q": None,
             "filter": {
                 "categorySlug": "emploi_offres",
@@ -198,6 +170,11 @@ def fetch_page(page: int, session: requests.Session) -> dict:
     return data
 
 
+def to_date(iso_timestamp: str | None) -> str | None:
+    """Trim an ISO-8601 timestamp ("2026-07-03T21:13:45.000Z") to just its date part."""
+    return iso_timestamp[:10] if iso_timestamp else iso_timestamp
+
+
 def parse_jobs(data: dict, page_num: int) -> list[dict]:
     announcements = (
         data
@@ -210,17 +187,12 @@ def parse_jobs(data: dict, page_num: int) -> list[dict]:
     jobs = []
     for a in announcements:
         # Location
-        cities      = a.get("cities") or []
-        city        = cities[0] if cities else {}
-        region      = city.get("region") or {}
+        cities = a.get("cities") or []
+        city   = cities[0] if cities else {}
+        region = city.get("region") or {}
 
         # Store
         store = a.get("store") or {}
-
-        # Media
-        media       = a.get("defaultMedia") or {}
-        all_medias  = a.get("medias") or []
-        extra_imgs  = [m["mediaUrl"] for m in all_medias if m.get("mediaUrl")]
 
         # Category
         category     = a.get("category") or {}
@@ -233,9 +205,8 @@ def parse_jobs(data: dict, page_num: int) -> list[dict]:
             # ── Core ──────────────────────────────
             "id":                  a.get("id"),
             "title":               a.get("title"),
-            "description":         (a.get("description") or "").strip(),
             "status":              a.get("status"),
-            "created_at":          a.get("createdAt"),
+            "created_at":          to_date(a.get("createdAt")),
             "url":                 f"https://www.ouedkniss.com/{a['slug']}" if a.get("slug") else None,
             "slug":                a.get("slug"),
 
@@ -245,41 +216,16 @@ def parse_jobs(data: dict, page_num: int) -> list[dict]:
             "category_name":       category_name,
 
             # ── Location ──────────────────────────
-            "city_id":             city.get("id"),
             "city":                city.get("name"),
-            "city_slug":           city.get("slug"),
-            "wilaya_id":           region.get("id"),
             "wilaya":              region.get("name"),
-            "wilaya_slug":         region.get("slug"),
-
-            # ── Price / Salary ────────────────────
-            "price":               a.get("price"),
-            "price_preview":       a.get("pricePreview"),
-            "price_type":          a.get("priceType"),
-            "price_unit":          a.get("priceUnit"),
-            "old_price":           a.get("oldPrice"),
-            "exchange_type":       a.get("exchangeType"),
-            "payment_method":      a.get("paymentMethod"),
 
             # ── Engagement ───────────────────────
             "like_count":          a.get("likeCount"),
-            "is_comment_enabled":  a.get("isCommentEnabled"),
-            "has_delivery":        a.get("hasDelivery"),
-            "delivery_type":       a.get("deliveryType"),
 
             # ── Store / Poster ───────────────────
             "is_from_store":       a.get("isFromStore"),
             "store_id":            store.get("id"),
             "store_name":          store.get("name"),
-            "store_slug":          store.get("slug"),
-            "store_image":         store.get("imageUrl"),
-            "store_is_verified":   store.get("isVerified"),
-            "store_is_official":   store.get("isOfficial"),
-            "user_id":             (a.get("user") or {}).get("id"),
-
-            # ── Media ────────────────────────────
-            "image_url":           media.get("mediaUrl"),
-            "extra_images":        ", ".join(extra_imgs) if extra_imgs else None,
 
             # ── Meta ─────────────────────────────
             "page":                page_num,
@@ -340,6 +286,29 @@ def json_to_csv(json_filename: str, csv_filename: str):
     print(f"✅ Converted {len(rows)} jobs → {csv_filename}")
 
 
+def send_email(csv_filename: str):
+    """Email csv_filename as an attachment, using credentials from EMAIL_CONFIG_FILE."""
+    if not EMAIL_CONFIG_FILE.exists():
+        print(f"  ⚠ Skipping email: {EMAIL_CONFIG_FILE.name} not found (see email_config.example.json)")
+        return
+
+    config = json.loads(EMAIL_CONFIG_FILE.read_text(encoding="utf-8"))
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Ouedkniss Jobs — {date.today().isoformat()}"
+    msg["From"] = config["gmail_address"]
+    msg["To"] = config["recipient"]
+    msg.set_content(f"Daily scrape attached ({csv_filename}).")
+
+    csv_bytes = Path(csv_filename).read_bytes()
+    msg.add_attachment(csv_bytes, maintype="text", subtype="csv", filename=csv_filename)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(config["gmail_address"], config["gmail_app_password"])
+        smtp.send_message(msg)
+    print(f"  ✅ Emailed {csv_filename} → {config['recipient']}")
+
+
 def main():
     print("🐍 Ouedkniss Job Scraper — Full Run\n")
     all_jobs = []
@@ -385,6 +354,7 @@ def main():
 
     save_json(all_jobs, JSON_FILE)
     json_to_csv(JSON_FILE, CSV_FILE)
+    send_email(CSV_FILE)
 
 
 if __name__ == "__main__":
