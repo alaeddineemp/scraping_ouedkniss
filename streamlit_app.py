@@ -5,6 +5,7 @@ Click "Run scrape" to fetch job listings from Ouedkniss and download the
 results as CSV. Runs entirely in memory — nothing is written to disk.
 """
 
+import collections
 import csv
 import datetime
 import io
@@ -114,7 +115,14 @@ if st.button("▶ Run scrape", type="primary"):
                 file_name="jobs.csv",
                 mime="text/csv",
             )
-            st.dataframe(all_jobs, use_container_width=True)
+
+            st.subheader("Statistics")
+            st.metric("Total jobs", len(all_jobs))
+
+            category_counts = collections.Counter(
+                job.get("category_name") or "Unknown" for job in all_jobs
+            )
+            st.bar_chart(dict(category_counts.most_common()), horizontal=True)
 
     except requests.exceptions.JSONDecodeError:
         progress.empty()
