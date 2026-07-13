@@ -11,6 +11,8 @@ import datetime
 import io
 import time
 
+import altair as alt
+import pandas as pd
 import requests
 import streamlit as st
 
@@ -122,7 +124,17 @@ if st.button("▶ Run scrape", type="primary"):
             category_counts = collections.Counter(
                 job.get("category_name") or "Unknown" for job in all_jobs
             )
-            st.bar_chart(dict(category_counts.most_common()), horizontal=True)
+            counts_df = pd.DataFrame(category_counts.most_common(), columns=["category", "count"])
+
+            bars = alt.Chart(counts_df).mark_bar().encode(
+                x=alt.X("count:Q", title="Jobs"),
+                y=alt.Y("category:N", sort="-x", title=None),
+            )
+            labels = bars.mark_text(align="left", dx=3).encode(text="count:Q")
+            st.altair_chart(
+                (bars + labels).properties(height=25 * len(counts_df)),
+                use_container_width=True,
+            )
 
     except requests.exceptions.JSONDecodeError:
         progress.empty()
